@@ -1,0 +1,53 @@
+{
+  "name": "dsh-topic-guard",
+  "version": "0.1.0",
+  "description": "Topic confirmation for DeepSeek Harness: popup topic check every N user messages + /topic command",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "src",
+    "README.md",
+    "README.zh.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "plugin",
+    "session",
+    "topic",
+    "cordis"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fishinwater/dsh-topic-guard.git"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "verify-sync": "node scripts/check-sync.mjs"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-agent": "^0.1.0-rc.8",
+    "@deepseek-ai/dsh-commands": "^0.1.0-rc.8",
+    "@deepseek-ai/dsh-session-title": "^0.1.0-rc.8",
+    "@deepseek-ai/dsh-user-questions": "^0.1.0-rc.8"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}
