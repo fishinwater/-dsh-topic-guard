@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/fishinwater/-dsh-topic-guard/schema/topic.schema.json",
+  "title": "Topic",
+  "description": "dsh-topic-guard 主题资产 topic.json（Topic-Aware Workspace Memory 数据层）",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "domain",
+    "goal",
+    "status",
+    "edges",
+    "sessionIds",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9\\u4e00-\\u9fff][a-z0-9\\u4e00-\\u9fff-]{0,63}$",
+      "description": "kebab-case id，允许 CJK"
+    },
+    "domain": {
+      "type": "string",
+      "description": "业务域（如 db / frontend / infra）"
+    },
+    "goal": {
+      "type": "string",
+      "description": "目标描述"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "active",
+        "archived"
+      ]
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "target"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "causal",
+              "hierarchical"
+            ]
+          },
+          "target": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "sessionIds": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "createdAt": {
+      "type": "number",
+      "description": "epoch ms"
+    },
+    "updatedAt": {
+      "type": "number",
+      "description": "epoch ms"
+    }
+  }
+}

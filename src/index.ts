@@ -1,193 +1,213 @@
+/**
+ * dsh-topic-guard v0.2.0 — Topic-Aware Workspace Memory for DeepSeek Harness.
+ *
+ * 三层架构（规格 §3）：
+ * - 数据层 memory/：.harness/topics/ 布局（topic.json + summary.md + artifacts/），
+ *   默认根 ~/.dsh/topics/（config rootDir 可覆盖为项目目录以便 Git 提交）。
+ * - 控制层 manager/：Drift Detector（规则级投影 fold）+ Router（/t 命令族）+ Attributor。
+ * - 交互层 client/：非阻塞 Inline Chip（客户端 bundle，conversation.input.dock 槽位）。
+ *
+ * 桥接：漂移建议通过会话投影单元（key 'topic-guard'）实时推给客户端（session/projection 帧，
+ * 永不落盘、断线重连由宿主重算）；chip 的 [新建]/[忽略] 通过 /t new|ignore 命令回传（command/run
+ * 事件同时驱动 fold 清除建议）。
+ */
 import { Service } from '@deepseek-ai/cordis';
 import z from '@deepseek-ai/schemastery';
+import type { Context } from '@deepseek-ai/cordis';
+// 类型增广：ctx.commands / ctx.sessionTitle / SessionEventMap['command/run']
+import type {} from '@deepseek-ai/dsh-commands';
+import type {} from '@deepseek-ai/dsh-session-title';
+import { WorkspaceMemoryStore } from './memory/store.ts';
+import { resolveRoot } from './memory/paths.ts';
+import { TopicRouter, type CommandResult } from './manager/router.ts';
+import {
+  applyDrift,
+  initDriftState,
+  viewOf,
+  type DriftConfig,
+  type DriftState,
+} from './manager/drift.ts';
+import { jsonSchemaValidator, isDriftState } from './memory/schema.ts';
+import type { SessionEvent } from '@deepseek-ai/dsh-session/types';
 
-/**
- * dsh-topic-guard: human-confirmed session topic management for DeepSeek Harness.
- *
- * - Every N direct user messages (config `checkEvery`, default 5), pops a
- *   topic-confirmation dialog via `ctx.userQuestions.ask()`.
- * - Options: keep going / rename this session (custom title input) / suggest a
- *   fresh session.
- * - Registers the global `/topic` command: `/topic` pops the dialog;
- *   `/topic <title>` renames the current session directly.
- *
- * Listens on the root context's `session/event` feed (fire-and-forget, never
- * blocks the agent loop) and counts only direct human prompts
- * (source.kind === 'user'), so injected context (file notices, skills,
- * goal continuations) never triggers a dialog.
- */
 export const name = 'topic-guard';
 
-const checkEverySchema = z.number().step(1).min(1);
-const enabledSchema = z.boolean();
-const topicQuestionSchema = z.string();
-const topicKeepLabelSchema = z.string();
-const topicRenameLabelSchema = z.string();
-const topicNewLabelSchema = z.string();
+// 配置校验：与 DSH 内置插件一致使用 schemastery 普通 schema（缺省由构造器兜底，
+// 不做 .optional() 链——cordis 对缺失键宽容，与旧版 topic-guard 行为一致）。
+const thresholdSchema = z.number().min(1);
+const weightSchema = z.number().min(0);
 
 export class TopicGuard extends Service {
-  static inject = ['userQuestions', 'sessionTitle', 'commands', 'agents'];
+  static inject = ['commands', 'sessionTitle', 'agents'];
 
-  static Config = z.object({
-    /** Pop the topic dialog after this many direct user messages. Default 5. */
-    checkEvery: checkEverySchema,
-    /** Master switch for the automatic dialog. Default true. */
-    enabled: enabledSchema,
-    /** Question text shown in the automatic dialog. */
-    topicQuestion: topicQuestionSchema,
-    /** Label of the "keep going" option. */
-    topicKeepLabel: topicKeepLabelSchema,
-    /** Label of the "rename session" option. */
-    topicRenameLabel: topicRenameLabelSchema,
-    /** Label of the "suggest a fresh session" option. */
-    topicNewLabel: topicNewLabelSchema,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  static Config: any = z.object({
+    /** 记忆存储根；缺省 ~/.dsh/topics（用户决策 2：全局固定目录）。 */
+    rootDir: z.string(),
+    /** 总开关。 */
+    enabled: z.boolean(),
+    /** 漂移检测参数（规则级，非 LLM）。 */
+    drift: z.object({
+      threshold: thresholdSchema,
+      weights: z.object({
+        keyword: weightSchema,
+        pathJump: weightSchema,
+        toolSwitch: weightSchema,
+      }),
+      /** 关键词规则：候选主题名 → 关键词列表。 */
+      keywords: z.dict(z.array(z.string())),
+      cooldownMessages: z.number().min(1),
+    }),
   });
 
   declare private config: {
-    checkEvery: number;
+    rootDir?: string;
     enabled: boolean;
-    topicQuestion: string;
-    topicKeepLabel: string;
-    topicRenameLabel: string;
-    topicNewLabel: string;
+    drift: DriftConfig;
   };
-  /** session -> direct-user-message counter */
-  declare private counters: WeakMap<object, number>;
-  /** session -> timestamp of last dialog (ms), to avoid double-pops */
-  declare private lastAskAt: WeakMap<object, number>;
+
+  private readonly store: WorkspaceMemoryStore;
+  private readonly router: TopicRouter;
 
   constructor(ctx: any, config: Record<string, unknown> = {}) {
-    super(ctx);
+    super(ctx, 'topic-guard');
+    const drift = (config.drift ?? {}) as Record<string, unknown>;
+    const weights = (drift.weights ?? {}) as Record<string, unknown>;
     this.config = {
-      checkEvery: 5,
-      enabled: true,
-      topicQuestion: '当前会话似乎积累了不少内容，确认一下主题？',
-      topicKeepLabel: '主题未变，继续当前会话',
-      topicRenameLabel: '重命名当前会话（输入新主题）',
-      topicNewLabel: '本会话混入了多个主题，建议新建会话',
-      ...config,
+      rootDir: typeof config.rootDir === 'string' ? config.rootDir : undefined,
+      enabled: config.enabled !== false,
+      drift: {
+        threshold: typeof drift.threshold === 'number' ? drift.threshold : 50,
+        weights: {
+          keyword: typeof weights.keyword === 'number' ? weights.keyword : 25,
+          pathJump: typeof weights.pathJump === 'number' ? weights.pathJump : 30,
+          toolSwitch: typeof weights.toolSwitch === 'number' ? weights.toolSwitch : 20,
+        },
+        keywords: (drift.keywords as Record<string, string[]> | undefined) ?? {},
+        cooldownMessages: typeof drift.cooldownMessages === 'number' ? drift.cooldownMessages : 3,
+      },
     };
-    this.counters = new WeakMap();
-    this.lastAskAt = new WeakMap();
+    this.store = new WorkspaceMemoryStore(resolveRoot(this.config.rootDir));
+    this.router = new TopicRouter(this.store, ctx.logger ?? {});
 
-    this.registerSessionFeed();
-    this.registerTopicCommand();
+    void this.store.init().catch((error) => {
+      ctx.logger?.warn?.(`topic-guard: 初始化记忆目录失败: ${error instanceof Error ? error.message : String(error)}`);
+    });
+
+    this.registerProjection();
+    this.registerCommands();
+    this.registerTopicCompatCommand();
   }
 
-  /** Count direct human messages on the root session feed. */
-  registerSessionFeed(): void {
-    this.ctx.on('session/event', (session: any, event: any) => {
-      if (!this.config.enabled) return;
-      if (event.type !== 'user/message') return;
-      const msg = event.data;
-      if (msg?.source?.kind !== 'user') return; // injected context is not a human prompt
-      const count = (this.counters.get(session) ?? 0) + 1;
-      this.counters.set(session, count);
-      if (count >= this.config.checkEvery) {
-        this.counters.set(session, 0);
-        const now = Date.now();
-        const last = this.lastAskAt.get(session) ?? 0;
-        if (now - last < 15_000) return; // debounce: at most one pop per 15s
-        this.lastAskAt.set(session, now);
-        void this.askTopic(session);
-      }
+  /**
+   * 会话投影单元：Drift Detector 作为纯 fold 运行，建议经 session/projection 帧
+   * 实时推给浏览器端 chip（key 'topic-guard'）。
+   */
+  private registerProjection(): void {
+    const cfg = this.config;
+    const ctx = this.ctx as Context;
+    // 无投影注册表的装配（headless 等）降级：命令与存储仍可用
+    ctx.inject(['sessionProjections'], (sub: any) => {
+      // stateSchema/viewSchema 的 zod 类型在目标 profile 不可解析（未装 zod）：
+      // 用形状校验器替代（仅被调用 .parse(v)），定义整体断言为 any。
+      const definition = {
+        key: 'topic-guard',
+        stateSchema: jsonSchemaValidator('drift-state', isDriftState),
+        init: () => initDriftState(),
+        apply: (state: DriftState, event: SessionEvent) => applyDrift(state, event, cfg.drift),
+        wire: {
+          viewSchema: jsonSchemaValidator('drift-view', (v: unknown) => v !== null && typeof v === 'object'),
+          view: (state: DriftState) => viewOf(state),
+        },
+        stateVersion: 1,
+      } as any;
+      sub.sessionProjections.register(definition);
     });
   }
 
-  /** Build the shared topic question payload. */
-  buildQuestion(session: any): unknown[] {
-    const current = this.ctx.sessionTitle.get(session);
-    return [
-      {
-        id: 'topic',
-        question: this.config.topicQuestion,
-        detail: current ? `当前会话标题：${current.title}` : undefined,
-        options: [
-          { label: this.config.topicKeepLabel, description: '主题未变，继续讨论' },
-          { label: this.config.topicRenameLabel, description: '输入新主题作为会话标题' },
-          { label: this.config.topicNewLabel, description: '避免旧主题上下文污染新任务' },
-        ],
-      },
-    ];
-  }
-
-  /** Handle one dialog answer. Returns a short human-readable outcome. */
-  handleAnswer(session: any, answer: any): string {
-    const item = answer?.answers?.[0];
-    const label = item?.selected?.[0];
-    if (!label) return '主题确认已取消';
-    if (label === this.config.topicRenameLabel) {
-      const title = item.custom?.trim();
-      if (!title) return '未输入新主题，会话标题保持不变';
-      try {
-        this.ctx.sessionTitle.rename(session, title);
-        return `会话主题已设为：${title}`;
-      } catch (error) {
-        return `设置主题失败：${error instanceof Error ? error.message : String(error)}`;
-      }
-    }
-    if (label === this.config.topicNewLabel) {
-      return '建议新建一个会话处理当前主题，避免上下文混杂';
-    }
-    return '继续当前会话';
-  }
-
-  /** Pop the topic dialog for one session (fire-and-forget, never throws). */
-  async askTopic(session: any): Promise<void> {
-    try {
-      const agent = this.findAgent(session);
-      const answer = await this.ctx.userQuestions.ask({
-        questions: this.buildQuestion(session),
-        ...(agent ? { agent } : {}),
-      });
-      this.handleAnswer(session, answer);
-    } catch (error) {
-      this.ctx.logger?.warn?.(`topic-guard: dialog failed: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  /** Match the live root agent driving a session, when one exists. */
-  findAgent(session: any): any {
-    try {
-      return this.ctx.agents.roots().find((agent: any) => agent.session.id === session.id);
-    } catch {
-      return undefined;
-    }
-  }
-
-  /** Register the global /topic command. */
-  registerTopicCommand(): void {
+  /** 注册 /t 命令族。 */
+  private registerCommands(): void {
     const ctx = this.ctx;
-    const self = this;
+    const router = this.router;
+    const store = this.store;
+    ctx.effect(function* () {
+      yield ctx.commands.register({
+        name: 't',
+        description: 'Topic 管理：new/switch/merge/list/show/edit/inject/link/ignore/rm',
+        handler: async (invocation: any) => {
+          const raw = (invocation.rawInput ?? '').trim();
+          const session = invocation.agent.session;
+          // /t inject 需要 agent 引用：在命令层直接注入
+          if (raw.startsWith('inject')) {
+            return await injectSummary(store, invocation.agent, raw);
+          }
+          const result: CommandResult = await router.handle(raw, session);
+          return { kind: result.kind, text: result.text };
+        },
+      });
+    }, 'topic-guard /t lifecycle');
+  }
+
+  /** 兼容旧版：/topic <标题> 直接重命名会话标题（不弹窗）。 */
+  private registerTopicCompatCommand(): void {
+    const ctx = this.ctx;
     ctx.effect(function* () {
       yield ctx.commands.register({
         name: 'topic',
-        description: '确认或设置当前会话主题',
+        description: '设置/重命名当前会话主题标题',
         handler: async (invocation: any) => {
-          const raw = invocation.rawInput.trim();
+          const raw = (invocation.rawInput ?? '').trim();
           const session = invocation.agent.session;
-          if (raw) {
-            try {
-              ctx.sessionTitle.rename(session, raw);
-              return { kind: 'success', text: `会话主题已设为：${raw}` };
-            } catch (error) {
-              return { kind: 'error', text: `设置主题失败：${error instanceof Error ? error.message : String(error)}` };
-            }
-          }
+          if (!raw) return { kind: 'error', text: '用法：/topic <标题>（或用 /t 管理 Topic 资产）' };
           try {
-            const answer = await ctx.userQuestions.ask({
-              agent: invocation.agent,
-              questions: self.buildQuestion(session),
-              signal: invocation.signal,
-            });
-            return { kind: 'success', text: self.handleAnswer(session, answer) };
+            ctx.sessionTitle.rename(session, raw);
+            return { kind: 'success', text: `会话主题已设为：${raw}` };
           } catch (error) {
-            if (invocation.signal?.aborted) return { kind: 'error', text: '主题确认已取消' };
-            return { kind: 'error', text: `主题确认失败：${error instanceof Error ? error.message : String(error)}` };
+            return { kind: 'error', text: `设置主题失败：${error instanceof Error ? error.message : String(error)}` };
           }
         },
       });
-    }, 'topic-guard lifecycle');
+    }, 'topic-guard /topic lifecycle');
+  }
+}
+
+/** /t inject 实现：把当前 Topic 摘要以 agent.inject 注入会话上下文。 */
+async function injectSummary(store: WorkspaceMemoryStore, agent: any, raw: string): Promise<{ kind: 'success' | 'error'; text: string }> {
+  const arg = raw.replace(/^inject/, '').trim();
+  let id = arg;
+  if (!id) {
+    const session = agent?.session;
+    if (session) {
+      const active = await store.activeTopicFor(session.id);
+      id = active?.id ?? '';
+    }
+  }
+  if (!id) return { kind: 'error', text: '当前会话未绑定 Topic：/t inject <id> 或先 /t new' };
+  const topic = await store.loadTopic(id);
+  if (!topic) return { kind: 'error', text: `Topic 不存在：${id}` };
+  const summary = await store.readSummary(id);
+  if (!summary.trim()) return { kind: 'error', text: `Topic ${id} 摘要为空，先 /t edit ${id} <摘要>` };
+  if (!agent || typeof agent.inject !== 'function') {
+    return { kind: 'success', text: `（无可用 agent，未注入）Topic ${id} 摘要：
+${summary.trim().slice(0, 300)}` };
+  }
+  try {
+    const { createMessage } = await import('@deepseek-ai/dsh-llm');
+    const message = createMessage({
+      role: 'user',
+      source: {
+        kind: 'plugin',
+        plugin: 'dsh-topic-guard',
+        form: 'snapshot',
+        sections: [{ name: `Topic:${id}`, text: summary }],
+      },
+      content: [{ type: 'text', text: `【当前 Topic 摘要：${id}】
+${summary}` }],
+    });
+    agent.inject(message);
+    return { kind: 'success', text: `已注入 Topic 摘要到会话上下文：${id}` };
+  } catch (error) {
+    return { kind: 'error', text: `注入失败：${error instanceof Error ? error.message : String(error)}` };
   }
 }
 

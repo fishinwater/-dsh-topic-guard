@@ -1,7 +1,7 @@
 {
   "name": "dsh-topic-guard",
-  "version": "0.1.0",
-  "description": "Topic confirmation for DeepSeek Harness: popup topic check every N user messages + /topic command",
+  "version": "0.2.0",
+  "description": "Topic-Aware Workspace Memory for DeepSeek Harness: rule-based drift detection, /t command family, topic store (.harness/topics layout), non-blocking inline chip",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -10,11 +10,15 @@
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
     },
+    "./client": {
+      "default": "./lib/client.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
     "lib",
     "src",
+    "schema",
     "README.md",
     "README.zh.md",
     "LICENSE"
@@ -25,23 +29,40 @@
     "plugin",
     "session",
     "topic",
+    "workspace-memory",
+    "drift-detection",
     "cordis"
   ],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/fishinwater/dsh-topic-guard.git"
+    "url": "git+https://github.com/fishinwater/-dsh-topic-guard.git"
+  },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ],
+      "platform": "web"
+    }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "verify-sync": "node scripts/check-sync.mjs"
+    "build": "tsc -p tsconfig.json && node scripts/build-client.mjs",
+    "build:server": "tsc -p tsconfig.json",
+    "build:client": "node scripts/build-client.mjs",
+    "verify-sync": "node scripts/check-sync.mjs",
+    "smoke": "node scripts/smoke.mjs"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-agent": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-commands": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-session-title": "^0.1.0-rc.8",
-    "@deepseek-ai/dsh-user-questions": "^0.1.0-rc.8"
+    "@deepseek-ai/dsh-agent": "^0.1.1-rc.1",
+    "@deepseek-ai/dsh-commands": "^0.1.1-rc.1",
+    "@deepseek-ai/dsh-llm": "^0.1.1-rc.1",
+    "@deepseek-ai/dsh-session": "^0.1.1-rc.1",
+    "@deepseek-ai/dsh-session-projection": "^0.1.1-rc.1",
+    "@deepseek-ai/dsh-session-title": "^0.1.1-rc.1"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
