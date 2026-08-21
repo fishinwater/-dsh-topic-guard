@@ -128,6 +128,14 @@ cmd /c reinstall-topic-guard.cmd    # Windows
 无构建链依赖）。漂移检测是会话投影单元：订阅 `session/event`（user/message、tool/call、command/run），
 规则级加权计分产出建议，经 `session/projection` 帧实时推给浏览器端 Chip。
 
+### 上下文管理（三期）
+
+- **上下文查看器**：面板「上下文」标签页展示当前会话发送给模型的上下文构成——用户输入/模型回复/工具调用/注入上下文（AGENTS、技能等）/压缩摘要的条数与估算 token、最近上下文预览；
+- **话题关联**：面板「关联」标签页按"最近用户输入 + 工具调用"特征匹配已定义 Topic，显示命中得分，一键设为当前；
+- **Topic 注入**：服务端在 agent 作用域注册 systemPrompt context——每次模型请求组装时自动注入当前活跃 Topic（id/域/目标/摘要前 600 字），`/t` 命令后刷新缓存。模型始终感知当前话题边界，聚焦相关目标。
+
+> 边界：真正"按 Topic 裁剪历史消息"需要 harness 内核开放请求级 surface 修改钩子（当前第三方插件不可达）；本插件以"入口纪律 + Topic 注入聚焦 + 内核 compaction"组合逼近规格预期收益。
+
 ## 边界与路线图
 
 - **"Agent 仅加载 Topic 摘要"是近似实现**：DSH 目前无按主题裁剪投影的内核机制，本插件以 `/t inject`（agent.inject 摘要）逼近；真正的裁剪属 harness 内核演进。
