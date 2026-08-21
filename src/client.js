@@ -289,7 +289,8 @@ window.__ModuleLoader__.load({
     }
     const NS = 'topic-guard';
     const PROJECTION_KEY = 'topic-guard';
-    const inject = ['slots', 'sessions', 'connection', 'remote'];
+    // 'remote.commands' 是嵌套域服务（与 goal 插件的 'remote.goals' 同理），须显式注入
+    const inject = ['slots', 'sessions', 'connection', 'remote', 'remote.commands'];
 
     function apply(ctx) {
       const sessions = ctx.sessions;
