@@ -59,7 +59,7 @@ window.__ModuleLoader__.load({
         '.dsh-tg-abtn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.06))}',
         '.dsh-tg-abtn.primary{border-color:var(--dsw-alias-state-business-primary,#2f7cf6);color:var(--dsw-alias-state-business-primary,#2f7cf6)}',
         '.dsh-tg-abtn.danger{border-color:var(--dsw-alias-state-error-primary,#d64545);color:var(--dsw-alias-state-error-primary,#d64545)}',
-        '.dsh-tg-hbtn{border:none;background:transparent;color:var(--dsw-alias-label-secondary,inherit);cursor:pointer;font-size:12px;padding:2px 8px;border-radius:6px;white-space:nowrap}',
+        '.dsh-tg-hbtn{border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.15));background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-secondary,inherit);cursor:pointer;font-size:12px;padding:2px 8px;border-radius:6px;white-space:nowrap}',
         '.dsh-tg-hbtn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.06))}',
         '.dsh-tg-empty{color:var(--dsw-alias-label-caption,inherit);padding:8px 4px}',
         '.dsh-tg-err{color:var(--dsw-alias-state-error-primary,#d64545);padding:8px 4px}',
@@ -125,7 +125,7 @@ window.__ModuleLoader__.load({
       dumpAbort = new AbortController();
       (async () => {
         try {
-          const rpc = { rpcId: 'topic-guard-panel', payload: {} };
+          const rpc = { rpcId: 'topic-guard-panel-' + Date.now() + '-' + Math.random().toString(36).slice(2), payload: {} };
           for await (const frame of api.events.mux(rpc, dumpAbort.signal)) {
             if (!frame || frame.type !== 'session/event') continue;
             const ev = frame.event;
@@ -160,7 +160,12 @@ window.__ModuleLoader__.load({
           const i = pendingDumps.indexOf(item);
           if (i >= 0) { pendingDumps.splice(i, 1); resolve(null); }
         }, 8000);
-        session.command(line).catch(function () {
+        session.command(line).then(function (res) {
+          if (!res || !res.ok || !(res.value && res.value.matched)) {
+            const i = pendingDumps.indexOf(item);
+            if (i >= 0) { pendingDumps.splice(i, 1); clearTimeout(item.timer); resolve({ kind: 'error', text: 'unmatched-command' }); }
+          }
+        }).catch(function () {
           const i = pendingDumps.indexOf(item);
           if (i >= 0) { pendingDumps.splice(i, 1); clearTimeout(item.timer); resolve(null); }
         });
@@ -205,6 +210,7 @@ window.__ModuleLoader__.load({
         panelPatch({ error: null, list: null, detail: null });
         dumpRequest(sessionId, session, '/t dump list').then(function (res) {
           if (!res) { panelPatch({ error: 'dump-failed' }); return; }
+          if (res.kind === 'error' && res.text === 'unmatched-command') { panelPatch({ error: 't-command-missing' }); return; }
           let data = null;
           try { data = JSON.parse(res.text); } catch (e) { data = null; }
           panelPatch({ list: data && Array.isArray(data.topics) ? data : null, error: data ? null : 'bad-dump' });
