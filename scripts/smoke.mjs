@@ -136,6 +136,10 @@ console.log('== router ==');
   ok('router switch', switched.kind === 'success');
   const bad = await router.handle('switch nope', session);
   ok('router unknown topic error', bad.kind === 'error');
+  const dumpList = await router.handle('dump list', session);
+  ok('router dump list JSON', dumpList.kind === 'success' && JSON.parse(dumpList.text).topics.some((t) => t.id === 'sql-优化'), dumpList.text.slice(0, 120));
+  const dumpShow = await router.handle('dump show', session);
+  ok('router dump show JSON', dumpShow.kind === 'success' && JSON.parse(dumpShow.text).summary.includes('加联合索引'), dumpShow.text.slice(0, 120));
 }
 
 console.log('');

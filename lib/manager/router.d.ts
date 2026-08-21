@@ -20,6 +20,7 @@ export declare class TopicRouter {
     private create;
     private switchTo;
     private merge;
+    private dump;
     private list;
     private show;
     private edit;

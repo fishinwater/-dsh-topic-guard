@@ -52,6 +52,7 @@ export class TopicRouter {
       case 'switch': return this.switchTo(restText, session);
       case 'merge': return this.merge(restText);
       case 'list': return this.list(session);
+      case 'dump': return this.dump(restText, session);
       case 'show': return this.show(restText, session);
       case 'edit': return this.edit(restText, session);
       case 'inject': return this.inject(restText, session);
@@ -111,6 +112,32 @@ export class TopicRouter {
     return {
       kind: 'success',
       text: `已合并：${b} → ${into}（摘要拼接、资料去重、causal 边 ${into}→${b}，${b} 归档；/t show ${into} 查看）`,
+    };
+  }
+
+  // ---- dump（客户端面板数据源：单行 JSON，供 TopicPanel 解析渲染）----
+  private async dump(args: string, session: SessionLike): Promise<CommandResult> {
+    const trimmed = args.trim();
+    if (trimmed.startsWith('show')) {
+      let id = trimmed.replace(/^show\s*/, '').trim();
+      if (!id) {
+        const active = await this.store.activeTopicFor(session.id);
+        id = active?.id ?? '';
+      }
+      if (!id) return { kind: 'success', text: JSON.stringify({ error: 'no-topic' }) };
+      const topic = await this.store.loadTopic(id);
+      if (!topic) return { kind: 'success', text: JSON.stringify({ error: 'not-found', id }) };
+      const summary = await this.store.readSummary(id);
+      const artifacts = await this.store.readArtifacts(id);
+      return { kind: 'success', text: JSON.stringify({ topic, summary, artifacts }) };
+    }
+    const idx = await this.store.loadIndex();
+    return {
+      kind: 'success',
+      text: JSON.stringify({
+        activeTopicId: idx.sessionTopics[session.id] ?? null,
+        topics: Object.values(idx.topics).sort((a, b) => b.updatedAt - a.updatedAt),
+      }),
     };
   }
 
@@ -234,6 +261,7 @@ ${summary.trim().slice(0, 200)}`,
         '  /t edit <id> <摘要>              确认摘要（draft→active）',
         '  /t inject [id]                   注入摘要到上下文',
         '  /t link <a> <b> [--type causal|hierarchical]  关联边',
+        '  /t dump [list|show <id>]          输出 JSON（客户端面板数据源）',
         '  /t ignore                        放弃漂移建议',
         '  /t rm <id>                       删除',
         '数据目录：' + this.store.rootPath,
