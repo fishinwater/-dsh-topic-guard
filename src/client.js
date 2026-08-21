@@ -289,7 +289,7 @@ window.__ModuleLoader__.load({
       const remote = props.remote;
       const snap = useSyncExternalStore(panelSubscribe, panelSnapshot);
       return React.createElement('span', { style: { display: 'inline-flex', alignItems: 'center' } },
-        React.createElement('button', { type: 'button', className: 'dsh-tg-hbtn', onClick: function () { openPanel(sessionId); }, title: 'Topic 管理' }, '◈ Topic'),
+        React.createElement('button', { type: 'button', className: 'dsh-tg-hbtn', style: { background: 'var(--dsw-alias-state-business-primary,#2f7cf6)', color: '#fff', border: 'none' }, onClick: function () { openPanel(sessionId); }, title: 'Topic 管理' }, '◈ Topic'),
         renderPanelIfOwner(snap, sessionId, remote)
       );
     }
