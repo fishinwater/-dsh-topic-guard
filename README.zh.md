@@ -57,19 +57,27 @@ Agent 上下文的瓶颈不是算力，而是缺乏语义拓扑：跨 Topic 的�
 /t edit <id> <摘要文本...>         确认摘要（draft → active）
 /t inject [id]                     把当前 Topic 摘要注入会话上下文（agent.inject）
 /t link <a> <b> [--type causal|hierarchical]  建立关联边
+/t dump [list|show <id>]            输出 JSON（客户端面板数据源）
 /t ignore                          放弃当前漂移建议
 /t rm <id>                         删除 Topic
 ```
 
 **Attributor**——/t new 时扫描会话日志尾部，把关键文件路径与截断的工具输出片段结构化入资料抽屉（去重、限量）。
 
-### 交互层（Inline Chip）
+### 交互层（Inline Chip + 常驻 Topic 面板 + 资料抽屉）
 
 客户端 bundle（`lib/client.js`）把漂移建议渲染在 `conversation.input.dock`（composer 卡片上方独立行）：
 
 - "检测到可能的新话题：<候选>，[新建] [忽略]"，**3 秒自动消失**，不抢焦点；
 - 桥接：服务端投影单元 → `session/projection` 帧实时推送（永不落盘、重连重算）；
 - [新建] → `/t new <候选>`，[忽略] → `/t ignore`（经 `session.command` 回传，command/run 事件同时清除服务端建议）。
+
+**常驻 Topic 面板（二期）**：
+
+- **入口**：会话标题旁的 `◈ 当前Topic` 按钮，以及侧栏底部的 `Topics` 按钮；
+- **列表视图**：全部 Topic（id/状态/目标，当前会话的带高亮），点击行进入详情；
+- **详情视图（资料抽屉）**：域/目标/关联边 + 用户可编辑的摘要（保存即 /t edit）+ 关键文件引用 + 工具输出片段 + [设为当前][返回列表][删除]；
+- **数据通道**：`/t dump list|show <id>` 输出单行 JSON，客户端经 mux 流配对 `command/done` 取回渲染（无需新增宿主 RPC）。
 
 ## 安装
 
@@ -123,7 +131,7 @@ cmd /c reinstall-topic-guard.cmd    # Windows
 ## 边界与路线图
 
 - **"Agent 仅加载 Topic 摘要"是近似实现**：DSH 目前无按主题裁剪投影的内核机制，本插件以 `/t inject`（agent.inject 摘要）逼近；真正的裁剪属 harness 内核演进。
-- **常驻侧栏 Topic 面板 / 资料抽屉**（规格 §3.1）为二期：决策 1 定为"服务端完整 + Inline Chip"。
+- **常驻 Topic 面板 / 资料抽屉**（规格 §3.1）已落地（二期）：会话标题旁 `◈` 按钮 + 侧栏底部 `Topics` 按钮 + 浮层面板。
 - **投影校验器**：目标 profile 未装 zod，stateSchema/viewSchema 用形状校验器替代（仅 `.parse(v)`）；引入 zod 后可升级。
 - **Chip 为渐进增强**：服务端（/t 命令 + 数据层）不依赖客户端；客户端加载失败不影响会话。
 
