@@ -84,7 +84,7 @@ window.__ModuleLoader__.load({
       const [suggestion, setSuggestion] = useState(() => inject.getSuggestion());
       useEffect(() => {
         return inject.subscribe(() => setSuggestion(inject.getSuggestion()));
-      }, [inject]);
+      }, [inject.getSuggestion, inject.subscribe]);
       useEffect(() => {
         if (!suggestion) return undefined;
         const nonce = suggestion.nonce;
@@ -168,11 +168,20 @@ window.__ModuleLoader__.load({
     }
 
     // ---- 面板状态（模块级单例，按钮与面板共享）----
-    const panel = { open: false, sessionId: null, view: 'list', selectedId: null, list: null, detail: null, error: null, listeners: new Set() };
+    const panel = { open: false, sessionId: null, view: 'list', selectedId: null, list: null, detail: null, error: null, listeners: new Set(), cached: null };
+    // useSyncExternalStore 要求 getSnapshot 返回稳定引用：store 变化时重建快照缓存，
+    // 否则每次渲染新对象会触发无限更新（React #185）。
     function panelSnapshot() {
-      return { open: panel.open, sessionId: panel.sessionId, view: panel.view, selectedId: panel.selectedId, list: panel.list, detail: panel.detail, error: panel.error };
+      if (panel.cached === null) {
+        panel.cached = { open: panel.open, sessionId: panel.sessionId, view: panel.view, selectedId: panel.selectedId, list: panel.list, detail: panel.detail, error: panel.error };
+      }
+      return panel.cached;
     }
-    function panelPatch(patch) { Object.assign(panel, patch); panel.listeners.forEach(function (fn) { fn(); }); }
+    function panelPatch(patch) {
+      Object.assign(panel, patch);
+      panel.cached = null;
+      panel.listeners.forEach(function (fn) { fn(); });
+    }
     function panelSubscribe(fn) { panel.listeners.add(fn); return function () { panel.listeners.delete(fn); }; }
     function openPanel(sessionId) {
       panelPatch({ open: true, sessionId: sessionId || null, view: 'list', selectedId: null, list: null, detail: null, error: null });
