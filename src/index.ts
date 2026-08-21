@@ -130,44 +130,41 @@ export class TopicGuard extends Service {
     const ctx = this.ctx;
     const router = this.router;
     const store = this.store;
-    ctx.effect(function* () {
-      yield ctx.commands.register({
-        name: 't',
-        description: 'Topic 管理：new/switch/merge/list/show/edit/inject/link/ignore/rm',
-        handler: async (invocation: any) => {
-          const raw = (invocation.rawInput ?? '').trim();
-          const session = invocation.agent.session;
-          // /t inject 需要 agent 引用：在命令层直接注入
-          if (raw.startsWith('inject')) {
-            return await injectSummary(store, invocation.agent, raw);
-          }
-          const result: CommandResult = await router.handle(raw, session);
-          return { kind: result.kind, text: result.text };
-        },
-      });
-    }, 'topic-guard /t lifecycle');
+    // 直接注册（与内置 dsh-command-goal 一致：commands.register 内部用 layers.effect 管理生命周期，
+    // 不可再包 ctx.effect/generator，否则 generator 惰性导致命令从未注册）。
+    ctx.commands.register({
+      name: 't',
+      description: 'Topic 管理：new/switch/merge/list/show/edit/inject/link/ignore/rm',
+      handler: async (invocation: any) => {
+        const raw = (invocation.rawInput ?? '').trim();
+        const session = invocation.agent.session;
+        if (raw.startsWith('inject')) {
+          return await injectSummary(store, invocation.agent, raw);
+        }
+        const result: CommandResult = await router.handle(raw, session);
+        return { kind: result.kind, text: result.text };
+      },
+    });
   }
 
   /** 兼容旧版：/topic <标题> 直接重命名会话标题（不弹窗）。 */
   private registerTopicCompatCommand(): void {
     const ctx = this.ctx;
-    ctx.effect(function* () {
-      yield ctx.commands.register({
-        name: 'topic',
-        description: '设置/重命名当前会话主题标题',
-        handler: async (invocation: any) => {
-          const raw = (invocation.rawInput ?? '').trim();
-          const session = invocation.agent.session;
-          if (!raw) return { kind: 'error', text: '用法：/topic <标题>（或用 /t 管理 Topic 资产）' };
-          try {
-            ctx.sessionTitle.rename(session, raw);
-            return { kind: 'success', text: `会话主题已设为：${raw}` };
-          } catch (error) {
-            return { kind: 'error', text: `设置主题失败：${error instanceof Error ? error.message : String(error)}` };
-          }
-        },
-      });
-    }, 'topic-guard /topic lifecycle');
+    ctx.commands.register({
+      name: 'topic',
+      description: '设置/重命名当前会话主题标题',
+      handler: async (invocation: any) => {
+        const raw = (invocation.rawInput ?? '').trim();
+        const session = invocation.agent.session;
+        if (!raw) return { kind: 'error', text: '用法：/topic <标题>（或用 /t 管理 Topic 资产）' };
+        try {
+          ctx.sessionTitle.rename(session, raw);
+          return { kind: 'success', text: `会话主题已设为：${raw}` };
+        } catch (error) {
+          return { kind: 'error', text: `设置主题失败：${error instanceof Error ? error.message : String(error)}` };
+        }
+      },
+    });
   }
 }
 
