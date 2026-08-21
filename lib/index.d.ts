@@ -19,6 +19,8 @@ export declare class TopicGuard extends Service {
     private config;
     private readonly store;
     private readonly router;
+    /** sessionId → 注入文本（systemPrompt context 的同步数据源；/t 命令后刷新）。 */
+    private readonly topicCache;
     constructor(ctx: any, config?: Record<string, unknown>);
     /**
      * 会话投影单元：Drift Detector 作为纯 fold 运行，建议经 session/projection 帧
@@ -27,6 +29,21 @@ export declare class TopicGuard extends Service {
     private registerProjection;
     /** 注册 /t 命令族。 */
     private registerCommands;
+    /**
+     * 刷新一个会话的 Topic 注入缓存（异步读 store）。
+     * 无活跃 Topic → 清空（provider 返回空字符串，不贡献上下文）。
+     */
+    private refreshTopicContext;
+    /**
+     * 在 agent 作用域注册 systemPrompt context：每次模型请求组装时同步注入当前 Topic。
+     * scoped 注册（agent.ctx）保证只对该 agent 的组装生效（多会话互不污染）。
+     */
+    private attachTopicContext;
+    /**
+     * 覆盖已有 agent + 监听未来 agent：
+     * 插件加载时 agent 可能已创建（agent/created 不会重放），需主动扫描 roots。
+     */
+    private registerTopicInjection;
     /** 兼容旧版：/topic <标题> 直接重命名会话标题（不弹窗）。 */
     private registerTopicCompatCommand;
 }

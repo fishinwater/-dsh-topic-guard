@@ -64,6 +64,12 @@ window.__ModuleLoader__.load({
         '.dsh-tg-empty{color:var(--dsw-alias-label-caption,inherit);padding:8px 4px}',
         '.dsh-tg-err{color:var(--dsw-alias-state-error-primary,#d64545);padding:8px 4px}',
         '.dsh-tg-load{color:var(--dsw-alias-label-caption,inherit);padding:8px 4px}',
+        '.dsh-tg-tabs{display:flex;gap:6px;margin-bottom:10px}',
+        '.dsh-tg-tab{flex:1;border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.15));background:var(--dsw-alias-bg-base,#fff);color:var(--dsw-alias-label-secondary,inherit);border-radius:8px;padding:3px 0;font-size:12px;cursor:pointer;text-align:center}',
+        '.dsh-tg-tab.on{border-color:var(--dsw-alias-state-business-primary,#2f7cf6);color:var(--dsw-alias-state-business-primary,#2f7cf6)}',
+        '.dsh-tg-stat{display:flex;justify-content:space-between;padding:3px 8px;font-size:12px;color:var(--dsw-alias-label-secondary,inherit)}',
+        '.dsh-tg-prev{padding:4px 8px;margin:3px 0;background:var(--dsw-specific-tip,rgba(0,0,0,.03));border-radius:6px;font-size:11px;color:var(--dsw-alias-label-secondary,inherit);word-break:break-all}',
+        '.dsh-tg-match{padding:6px 8px;margin:3px 0;border-radius:8px;border:1px solid var(--dsw-alias-border-l1,rgba(0,0,0,.08))}',
       ].join('');
       document.head.appendChild(tag);
     }
@@ -138,12 +144,12 @@ window.__ModuleLoader__.load({
       });
     }
     // ---- 面板状态（模块级单例，按钮与面板共享）----
-    const panel = { open: false, sessionId: null, owner: null, view: 'list', selectedId: null, list: null, detail: null, error: null, listeners: new Set(), cached: null };
+    const panel = { open: false, sessionId: null, owner: null, view: 'list', tab: 'topics', selectedId: null, list: null, detail: null, error: null, listeners: new Set(), cached: null };
     // useSyncExternalStore 要求 getSnapshot 返回稳定引用：store 变化时重建快照缓存，
     // 否则每次渲染新对象会触发无限更新（React #185）。
     function panelSnapshot() {
       if (panel.cached === null) {
-        panel.cached = { open: panel.open, sessionId: panel.sessionId, owner: panel.owner, view: panel.view, selectedId: panel.selectedId, list: panel.list, detail: panel.detail, error: panel.error };
+        panel.cached = { open: panel.open, sessionId: panel.sessionId, owner: panel.owner, view: panel.view, tab: panel.tab, selectedId: panel.selectedId, list: panel.list, detail: panel.detail, error: panel.error };
       }
       return panel.cached;
     }
@@ -154,15 +160,100 @@ window.__ModuleLoader__.load({
     }
     function panelSubscribe(fn) { panel.listeners.add(fn); return function () { panel.listeners.delete(fn); }; }
     function openPanel(sessionId, owner) {
-      panelPatch({ open: true, sessionId: sessionId || null, owner: owner || null, view: 'list', selectedId: null, list: null, detail: null, error: null });
+      panelPatch({ open: true, sessionId: sessionId || null, owner: owner || null, view: 'list', tab: 'topics', selectedId: null, list: null, detail: null, error: null });
     }
     function closePanel() { panelPatch({ open: false }); }
 
     // ---- Topic 面板组件（浮层）----
+    // ---- 上下文查看器与话题关联（三期）----
+    function nodeText(n) {
+      try {
+        if (!n) return '';
+        if (typeof n.text === 'string') return n.text;
+        if (n.data && typeof n.data.text === 'string') return n.data.text;
+        if (n.message && Array.isArray(n.message.content)) return JSON.stringify(n.message.content).slice(0, 300);
+        return '';
+      } catch (e) { return ''; }
+    }
+    function renderContextView(nodes) {
+      const els = [];
+      if (!nodes || nodes.length === 0) {
+        els.push(React.createElement('div', { className: 'dsh-tg-load', key: 'c1' }, '暂无上下文'));
+        return els;
+      }
+      const counts = { user: 0, assistant: 0, tool: 0, context: 0, compaction: 0, command: 0, other: 0 };
+      let totalChars = 0;
+      const recent = [];
+      for (let i = 0; i < nodes.length; i++) {
+        const n = nodes[i] || {};
+        const kind = n.kind || 'other';
+        if (kind === 'user') counts.user++;
+        else if (kind === 'assistant') counts.assistant++;
+        else if (kind === 'tool-call' || kind === 'tool-result') counts.tool++;
+        else if (kind === 'context') counts.context++;
+        else if (kind === 'compaction') counts.compaction++;
+        else if (kind === 'command') counts.command++;
+        else counts.other++;
+        const txt = nodeText(n);
+        totalChars += txt.length;
+        if (recent.length < 6 && (kind === 'user' || kind === 'context') && txt) recent.push({ kind: kind, text: txt.slice(0, 100) });
+      }
+      els.push(React.createElement('div', { className: 'dsh-tg-sec', key: 'c2' }, '发送给模型的上下文构成（估算 token：' + Math.ceil(totalChars / 4) + '）'));
+      const statRows = [
+        ['用户输入', counts.user], ['模型回复', counts.assistant], ['工具调用/结果', counts.tool],
+        ['注入上下文(AGENTS/技能等)', counts.context], ['压缩摘要', counts.compaction], ['命令', counts.command], ['其他', counts.other],
+      ];
+      statRows.forEach(function (row) {
+        els.push(React.createElement('div', { className: 'dsh-tg-stat', key: 's' + row[0] },
+          React.createElement('span', null, row[0]), React.createElement('span', null, String(row[1]))));
+      });
+      if (recent.length > 0) {
+        els.push(React.createElement('div', { className: 'dsh-tg-sec', key: 'c3' }, '最近上下文'));
+        recent.forEach(function (rec, i) {
+          els.push(React.createElement('div', { className: 'dsh-tg-prev', key: 'r' + i }, (rec.kind === 'user' ? '用户：' : '注入：') + rec.text));
+        });
+      }
+      return els;
+    }
+    function renderMatchView(nodes, list, onSwitch) {
+      const els = [];
+      const topics = list && Array.isArray(list.topics) ? list.topics : [];
+      const features = [];
+      for (const n of (nodes || [])) {
+        if (!n) continue;
+        if (n.kind === 'user') { const t = nodeText(n); if (t) features.push(t); }
+        if (n.kind === 'tool-call') {
+          const argText = JSON.stringify(n.arguments || n.args || n.data || {});
+          if (argText && argText.length > 4) features.push(argText.slice(0, 300));
+        }
+      }
+      const joined = features.join(' ').toLowerCase();
+      const scored = topics.map(function (t) {
+        const hay = ((t.goal || '') + ' ' + (t.domain || '') + ' ' + t.id).toLowerCase();
+        const words = hay.split(/[^a-z0-9\u4e00-\u9fff]+/).filter(function (w) { return w.length >= 2; });
+        let score = 0;
+        for (const w of words) if (joined.includes(w)) score++;
+        return { topic: t, score: score };
+      }).filter(function (x) { return x.score > 0; }).sort(function (a, b) { return b.score - a.score; }).slice(0, 5);
+      els.push(React.createElement('div', { className: 'dsh-tg-sec', key: 'm1' }, '上下文命中话题（特征：最近用户输入 + 工具调用）'));
+      if (scored.length === 0) {
+        els.push(React.createElement('div', { className: 'dsh-tg-empty', key: 'm2' }, '未命中已定义话题。可用 /t new <名称> 为当前上下文创建话题'));
+      } else {
+        scored.forEach(function (s, i) {
+          els.push(React.createElement('div', { className: 'dsh-tg-match', key: 'm' + i, style: { display: 'flex', alignItems: 'center', gap: 8 } },
+            React.createElement('span', { className: 'dsh-tg-id' }, s.topic.id),
+            React.createElement('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-caption,inherit)' } }, '得分 ' + s.score),
+            React.createElement('button', { type: 'button', className: 'dsh-tg-abtn', style: { marginLeft: 'auto' }, onClick: function () { onSwitch(s.topic.id); } }, '设为当前')
+          ));
+        });
+      }
+      return els;
+    }
     function TopicPanel(props) {
       const sessionId = props.sessionId;
       const remote = props.remote;
       const snap = useSyncExternalStore(panelSubscribe, panelSnapshot);
+      const sessionSnap = typeof props.useSession === 'function' ? props.useSession() : null;
       const [summaryDraft, setSummaryDraft] = useState('');
       const [busy, setBusy] = useState(false);
       useEffect(function () {
@@ -228,8 +319,17 @@ window.__ModuleLoader__.load({
         React.createElement('span', { className: 'dsh-tg-pt' }, 'Topic 管理'),
         React.createElement('button', { type: 'button', className: 'dsh-tg-x', onClick: closePanel }, '×')
       ));
+      children.push(React.createElement('div', { className: 'dsh-tg-tabs', key: 'tabs' },
+        React.createElement('button', { type: 'button', className: 'dsh-tg-tab' + (snap.tab === 'topics' ? ' on' : ''), onClick: function () { panelPatch({ tab: 'topics' }); } }, '话题'),
+        React.createElement('button', { type: 'button', className: 'dsh-tg-tab' + (snap.tab === 'context' ? ' on' : ''), onClick: function () { panelPatch({ tab: 'context' }); } }, '上下文'),
+        React.createElement('button', { type: 'button', className: 'dsh-tg-tab' + (snap.tab === 'match' ? ' on' : ''), onClick: function () { panelPatch({ tab: 'match' }); } }, '关联')
+      ));
       if (snap.error) children.push(React.createElement('div', { className: 'dsh-tg-err', key: 'err' }, '加载失败：' + snap.error));
-      if (snap.view === 'list') {
+      if (snap.tab === 'context') {
+        renderContextView(sessionSnap ? sessionSnap.nodes : null).forEach(function (el) { children.push(el); });
+      } else if (snap.tab === 'match') {
+        renderMatchView(sessionSnap ? sessionSnap.nodes : null, list, switchTo).forEach(function (el) { children.push(el); });
+      } else if (snap.view === 'list') {
         if (!list) {
           children.push(React.createElement('div', { className: 'dsh-tg-load', key: 'load' }, '加载中…'));
         } else if (rows.length === 0) {
