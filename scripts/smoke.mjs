@@ -25,6 +25,7 @@ const CFG = {
   weights: { keyword: 25, pathJump: 30, toolSwitch: 20 },
   keywords: { 'SQL优化': ['sql', '索引', '慢查询'] },
   cooldownMessages: 3,
+  autoSuggestAfterMessages: 3,
 };
 
 const ev = (seq, type, data) => ({ type, seq, time: 1700000000000 + seq, data });
@@ -58,6 +59,28 @@ console.log('== drift fold ==');
   const before = JSON.stringify(s);
   s = applyDrift(s, ev(6, 'user/message', { source: { kind: 'plugin', plugin: 'x' }, content: 'SQL 索引' }), CFG);
   ok('injected context ignored', JSON.stringify(s) === before);
+}
+
+console.log('== auto-suggest ==');
+{
+  let s = initDriftState();
+  // 无标题无活跃 Topic：3 条消息后建议
+  s = applyDrift(s, ev(0, 'user/message', { source: { kind: 'user' }, content: '随便聊聊' }), CFG);
+  s = applyDrift(s, ev(1, 'user/message', { source: { kind: 'user' }, content: '继续聊' }), CFG);
+  s = applyDrift(s, ev(2, 'user/message', { source: { kind: 'user' }, content: '再聊' }), CFG);
+  ok('auto-suggest after 3 messages', s.suggestion !== null && s.suggestion.reasons.includes('auto-suggest'), JSON.stringify(s.suggestion));
+  ok('auto-suggest candidate default', s.suggestion && s.suggestion.candidate === '新会话主题');
+  // 绑定 Topic 后不再建议
+  s = applyDrift(s, ev(3, 'command/run', { commandId: 'c', name: 't', args: 'new sql优化' }), CFG);
+  s = applyDrift(s, ev(4, 'user/message', { source: { kind: 'user' }, content: '继续' }), CFG);
+  ok('no auto-suggest after binding', s.suggestion === null);
+  // 标题作为候选名
+  let s2 = initDriftState();
+  s2 = applyDrift(s2, ev(0, 'session/title', { title: '订单模块优化' }), CFG);
+  s2 = applyDrift(s2, ev(1, 'user/message', { source: { kind: 'user' }, content: 'a' }), CFG);
+  s2 = applyDrift(s2, ev(2, 'user/message', { source: { kind: 'user' }, content: 'b' }), CFG);
+  s2 = applyDrift(s2, ev(3, 'user/message', { source: { kind: 'user' }, content: 'c' }), CFG);
+  ok('auto-suggest uses session title', s2.suggestion && s2.suggestion.candidate === '订单模块优化', JSON.stringify(s2.suggestion));
 }
 
 console.log('== path utils ==');

@@ -114,8 +114,9 @@ window.__ModuleLoader__.load({
         dismissNow();
         void inject.runCommand('/t ignore');
       };
+      const isAutoSuggest = Array.isArray(suggestion.reasons) && suggestion.reasons.indexOf('auto-suggest') >= 0;
       return React.createElement('div', { className: 'dsh-tg-dock', 'data-topic-guard-chip': true },
-        React.createElement('span', { className: 'dsh-tg-text' }, '检测到可能的新话题：'),
+        React.createElement('span', { className: 'dsh-tg-text' }, isAutoSuggest ? '当前会话尚未绑定 Topic，建议创建：' : '检测到可能的新话题：'),
         React.createElement('strong', { className: 'dsh-tg-candidate' }, suggestion.candidate),
         React.createElement('button', { type: 'button', className: 'dsh-tg-btn dsh-tg-create', onClick: onCreate }, '新建'),
         React.createElement('button', { type: 'button', className: 'dsh-tg-btn', onClick: onIgnore }, '忽略'),

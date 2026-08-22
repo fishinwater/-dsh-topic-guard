@@ -33,6 +33,8 @@ export interface DriftConfig {
   keywords: Record<string, string[]>;
   /** 建议冷却：距离上次建议至少间隔多少条用户消息才再次建议。默认 3。 */
   cooldownMessages: number;
+  /** 新会话未绑定 Topic 时，累计多少条用户消息后自动建议创建。默认 3。 */
+  autoSuggestAfterMessages: number;
 }
 
 export interface DriftState {
@@ -40,6 +42,8 @@ export interface DriftState {
   suggestion: DriftSuggestion | null;
   /** 当前活跃 topic id（由 /t new|switch 的 command/run 事件驱动）。 */
   activeTopicId: string | null;
+  /** 最近会话标题（session/title 事件；auto-suggest 的候选名来源）。 */
+  sessionTitle: string | null;
   /** 已见用户消息数。 */
   messageCount: number;
   /** 上次产出建议时的 messageCount（冷却依据）。 */
@@ -72,6 +76,12 @@ const TOOL_FAMILIES: Record<string, string> = {
   goal: 'goal',
   'tool-goal': 'goal',
   ralph: 'ralph',
+  // 本 harness 实际暴露的工具名（run_code 承载全部代码执行）
+  run_code: 'code',
+  'tool-bash': 'shell',
+  'tool-pwsh': 'shell',
+  'tool-web': 'web',
+  'tool-subagent': 'subagent',
 };
 
 const FAMILY_LABEL: Record<string, string> = {
@@ -139,6 +149,7 @@ export function initDriftState(): DriftState {
   return {
     suggestion: null,
     activeTopicId: null,
+    sessionTitle: null,
     messageCount: 0,
     suggestedAtMessage: -1,
     clusterFamilies: [],
@@ -213,6 +224,22 @@ export function applyDrift(state: DriftState, event: SessionEvent, cfg: DriftCon
           next.suggestedAtMessage = next.messageCount;
         }
       }
+      // 自动建议：新会话累计 N 条用户消息仍未绑定 Topic → 建议创建（不依赖漂移信号）
+      if (
+        next.suggestion === null &&
+        next.activeTopicId === null &&
+        next.messageCount >= cfg.autoSuggestAfterMessages &&
+        (next.suggestedAtMessage === -1 || next.messageCount >= next.suggestedAtMessage + cfg.cooldownMessages)
+      ) {
+        next.suggestion = {
+          candidate: next.sessionTitle && next.sessionTitle.trim().length > 0 ? next.sessionTitle.trim() : '新会话主题',
+          score: cfg.threshold,
+          reasons: ['auto-suggest'],
+          nonce: `s${event.seq}`,
+          atSeq: event.seq,
+        };
+        next.suggestedAtMessage = next.messageCount;
+      }
       return next;
     }
     case 'tool/call': {
@@ -267,6 +294,12 @@ export function applyDrift(state: DriftState, event: SessionEvent, cfg: DriftCon
         next.suggestedAtMessage = next.messageCount;
       }
       return same(state, next) ? state : next;
+    }
+    case 'session/title': {
+      const d = event.data as { title?: string } | undefined;
+      if (!d || typeof d.title !== 'string') return state;
+      const next: DriftState = { ...state, sessionTitle: d.title };
+      return next;
     }
     case 'command/run': {
       const cmd = event.data as { name?: string; args?: string };

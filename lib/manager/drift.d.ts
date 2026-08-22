@@ -30,12 +30,16 @@ export interface DriftConfig {
     keywords: Record<string, string[]>;
     /** 建议冷却：距离上次建议至少间隔多少条用户消息才再次建议。默认 3。 */
     cooldownMessages: number;
+    /** 新会话未绑定 Topic 时，累计多少条用户消息后自动建议创建。默认 3。 */
+    autoSuggestAfterMessages: number;
 }
 export interface DriftState {
     /** 当前待确认的建议（客户端 chip 数据源）。 */
     suggestion: DriftSuggestion | null;
     /** 当前活跃 topic id（由 /t new|switch 的 command/run 事件驱动）。 */
     activeTopicId: string | null;
+    /** 最近会话标题（session/title 事件；auto-suggest 的候选名来源）。 */
+    sessionTitle: string | null;
     /** 已见用户消息数。 */
     messageCount: number;
     /** 上次产出建议时的 messageCount（冷却依据）。 */
