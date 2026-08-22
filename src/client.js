@@ -91,15 +91,7 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         return inject.subscribe(() => setSuggestion(inject.getSuggestion()));
       }, [inject.getSuggestion, inject.subscribe]);
-      useEffect(() => {
-        if (!suggestion) return undefined;
-        const nonce = suggestion.nonce;
-        const timer = setTimeout(() => {
-          markDismissed(sessionId, nonce);
-          setSuggestion(null);
-        }, CHIP_TTL_MS);
-        return () => clearTimeout(timer);
-      }, [suggestion ? suggestion.nonce : null, sessionId]);
+      // 无自动消失：提示持续显示，直到用户 [创建]/[忽略] 或服务端清除建议
       if (!suggestion || isDismissed(sessionId, suggestion.nonce)) return null;
       const dismissNow = () => {
         markDismissed(sessionId, suggestion.nonce);

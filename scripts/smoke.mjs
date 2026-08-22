@@ -70,8 +70,11 @@ console.log('== auto-suggest ==');
   s = applyDrift(s, ev(2, 'user/message', { source: { kind: 'user' }, content: '再聊' }), CFG);
   ok('auto-suggest after 3 messages', s.suggestion !== null && s.suggestion.reasons.includes('auto-suggest'), JSON.stringify(s.suggestion));
   ok('auto-suggest candidate default', s.suggestion && s.suggestion.candidate === '新会话主题');
+  // 用户发新消息（未点 chip）：auto-suggest 建议保留（需显式干预才消失）
+  s = applyDrift(s, ev(3, 'user/message', { source: { kind: 'user' }, content: '继续工作' }), CFG);
+  ok('auto-suggest persists across new messages', s.suggestion !== null && s.suggestion.reasons.includes('auto-suggest'));
   // 绑定 Topic 后不再建议
-  s = applyDrift(s, ev(3, 'command/run', { commandId: 'c', name: 't', args: 'new sql优化' }), CFG);
+  s = applyDrift(s, ev(4, 'command/run', { commandId: 'c', name: 't', args: 'new sql优化' }), CFG);
   s = applyDrift(s, ev(4, 'user/message', { source: { kind: 'user' }, content: '继续' }), CFG);
   ok('no auto-suggest after binding', s.suggestion === null);
   // 标题作为候选名

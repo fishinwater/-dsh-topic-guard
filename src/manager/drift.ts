@@ -204,8 +204,12 @@ export function applyDrift(state: DriftState, event: SessionEvent, cfg: DriftCon
         windowEvents: 0,
         lastToolFamily: null,
       };
-      // 新指令 → 重置建议窗口
-      next.suggestion = null;
+      // 新指令 → 重置建议窗口；但 auto-suggest（"建议创建 Topic"）需用户显式干预
+      // （[创建]/[忽略]）才消失——发新消息不清除，提示持续显示。
+      next.suggestion =
+        state.suggestion && Array.isArray(state.suggestion.reasons) && state.suggestion.reasons.includes('auto-suggest')
+          ? state.suggestion
+          : null;
       const content = textOf(msg.content);
       const hit = keywordHit(content, cfg);
       if (hit) {
