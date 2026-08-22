@@ -246,7 +246,13 @@ window.__ModuleLoader__.load({
       const sessionId = props.sessionId;
       const remote = props.remote;
       const snap = useSyncExternalStore(panelSubscribe, panelSnapshot);
-      const sessionSnap = typeof props.useSession === 'function' ? props.useSession() : null;
+      const bindingS = props.sessions && props.sessions.binding ? props.sessions.binding(sessionId) : undefined;
+      const sessionFacade = bindingS && bindingS.session ? bindingS.session : undefined;
+      const sessionSnap = typeof props.useSession === 'function'
+        ? props.useSession()
+        : (sessionFacade && sessionFacade.conversation && typeof sessionFacade.conversation.getSnapshot === 'function'
+            ? sessionFacade.conversation.getSnapshot()
+            : null);
       const [summaryDraft, setSummaryDraft] = useState('');
       const [busy, setBusy] = useState(false);
       useEffect(function () {
@@ -376,22 +382,24 @@ window.__ModuleLoader__.load({
     }
 
     // ---- 入口按钮：会话标题旁 + 侧栏底部 ----
-    function renderPanelIfOwner(snap, sessionId, owner, remote) {
+    function renderPanelIfOwner(snap, sessionId, owner, remote, sessions, useSession) {
       if (!snap.open || snap.owner !== owner || snap.sessionId !== (sessionId || null)) return null;
-      return React.createElement(TopicPanel, { sessionId: sessionId || null, remote: remote });
+      return React.createElement(TopicPanel, { sessionId: sessionId || null, remote: remote, sessions: sessions, useSession: useSession });
     }
     function HeaderTopicButton(props) {
       const listState = typeof props.useSessions === 'function' ? props.useSessions((s) => s) : null;
       const sessionId = props.sessionId || (listState && listState.current) || null;
       const remote = props.remote;
+      const sessions = props.sessions;
       const snap = useSyncExternalStore(panelSubscribe, panelSnapshot);
       return React.createElement('span', { style: { display: 'inline-flex', alignItems: 'center' } },
         React.createElement('button', { type: 'button', className: 'dsh-tg-hbtn', style: { background: 'var(--dsw-alias-state-business-primary,#2f7cf6)', color: '#fff', border: 'none' }, onClick: function () { openPanel(sessionId, 'header'); }, title: 'Topic 管理' }, '◈ Topic'),
-        renderPanelIfOwner(snap, sessionId, 'header', remote)
+        renderPanelIfOwner(snap, sessionId, 'header', remote, sessions, props.useSession)
       );
     }
     function FooterTopicsButton(props) {
       const remote = props.remote;
+      const sessions = props.sessions;
       const snap = useSyncExternalStore(panelSubscribe, panelSnapshot);
       // root scope 无 props.sessionId：用 useSessions 选择器拿当前会话（selector hook 必须传函数）
       const listState = typeof props.useSessions === 'function' ? props.useSessions((s) => s) : null;
@@ -399,7 +407,7 @@ window.__ModuleLoader__.load({
       const wide = props.wide !== false;
       return React.createElement('span', { style: { display: 'inline-flex' } },
         React.createElement('button', { type: 'button', className: 'dsh-tg-hbtn', onClick: function () { openPanel(currentId, 'footer'); }, title: 'Topics' }, wide ? 'Topics' : '◈'),
-        renderPanelIfOwner(snap, currentId, 'footer', remote)
+        renderPanelIfOwner(snap, currentId, 'footer', remote, sessions, props.useSession)
       );
     }
     const NS = 'topic-guard';
@@ -415,14 +423,14 @@ window.__ModuleLoader__.load({
         name: 'conversation.session.header.actions',
         id: NS,
         order: 10,
-        inject: () => ({ remote: remote }),
+        inject: () => ({ remote: remote, sessions: sessions }),
       }, HeaderTopicButton));
       // 侧栏底部：Topics 常驻入口
       ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
         name: 'sidebar.footer.action',
         id: NS,
         order: 10,
-        inject: () => ({ remote: remote }),
+        inject: () => ({ remote: remote, sessions: sessions }),
       }, FooterTopicsButton));
       ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
         name: 'conversation.input.dock',
