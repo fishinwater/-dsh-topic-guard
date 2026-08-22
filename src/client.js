@@ -249,7 +249,7 @@ window.__ModuleLoader__.load({
       const bindingS = props.sessions && props.sessions.binding ? props.sessions.binding(sessionId) : undefined;
       const sessionFacade = bindingS && bindingS.session ? bindingS.session : undefined;
       const sessionSnap = typeof props.useSession === 'function'
-        ? props.useSession()
+        ? props.useSession((s) => s)
         : (sessionFacade && sessionFacade.conversation && typeof sessionFacade.conversation.getSnapshot === 'function'
             ? sessionFacade.conversation.getSnapshot()
             : null);
