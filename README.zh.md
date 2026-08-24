@@ -3,7 +3,7 @@
 Topic-Aware Workspace Memory for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)：
 将用户的会话上下文组织为**可版本化、可跨会话复用的 Topic 资产**，用规则级漂移检测 + 非阻塞 Inline Chip 实现"人机协同的上下文治理"。
 
-[English](README.md) | 中文
+[English](README.md) | 中文 | [使用手册](USAGE.zh.md)
 
 ## 背景与定位
 
