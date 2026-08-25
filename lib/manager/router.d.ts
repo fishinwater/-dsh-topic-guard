@@ -15,10 +15,13 @@ export declare class TopicRouter {
     private readonly logger;
     /** 关联度配置（非 LLM 规则级；注入 /t related|match 使用）。 */
     private readonly relatedness;
+    /** 事实变更回调（topic-guard 侧用于通知 spill 输出池主动维护）。 */
+    private readonly onFactsChanged?;
     constructor(store: WorkspaceMemoryStore, logger?: {
         warn?: (msg: string) => void;
     }, opts?: {
         relatedness?: RelatednessConfig;
+        onFactsChanged?: (topicId: string) => void;
     });
     /** 处理 /t <sub> <args...>。 */
     handle(raw: string, session: SessionLike): Promise<CommandResult>;

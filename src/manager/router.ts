@@ -43,15 +43,18 @@ export class TopicRouter {
   private readonly logger: { warn?: (msg: string) => void };
   /** 关联度配置（非 LLM 规则级；注入 /t related|match 使用）。 */
   private readonly relatedness: RelatednessConfig;
+  /** 事实变更回调（topic-guard 侧用于通知 spill 输出池主动维护）。 */
+  private readonly onFactsChanged?: (topicId: string) => void;
 
   constructor(
     store: WorkspaceMemoryStore,
     logger: { warn?: (msg: string) => void } = {},
-    opts: { relatedness?: RelatednessConfig } = {},
+    opts: { relatedness?: RelatednessConfig; onFactsChanged?: (topicId: string) => void } = {},
   ) {
     this.store = store;
     this.logger = logger;
     this.relatedness = opts.relatedness ?? { enabled: true, topK: 3, minScore: 0.5, maxHops: 2, weights: { edgeCausal: 1.0, edgeHierarchical: 0.6, edgeDecay: 0.5, pathFamily: 0.8, factKey: 0.5, sessionCo: 0.3, keyword: 0.2, summary: 0.4 } };
+    this.onFactsChanged = opts.onFactsChanged;
   }
 
   /** 处理 /t <sub> <args...>。 */
@@ -299,6 +302,8 @@ ${summary.trim().slice(0, 200)}`,
       const before = await this.store.activeFacts(id);
       const manifest = await this.store.appendFacts(id, [{ factKey, value, source: { turn: 'cli', tool: 'fact' } }]);
       const after = await this.store.activeFacts(id);
+      // 事实变更 → 通知输出池主动维护（冲突条目立即 superseded 并落盘）
+      try { this.onFactsChanged?.(id) } catch { /* best-effort */ }
       const replaced = before.find((f) => f.factKey === factKey && f.value !== value);
       if (replaced) {
         return { kind: 'success', text: `冲突替换：${id} 的 ${factKey} ${replaced.value} → ${value}（旧条目 superseded，后者为准）` };
