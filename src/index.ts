@@ -28,6 +28,7 @@ import {
   type DriftState,
 } from './manager/drift.ts';
 import { jsonSchemaValidator, isDriftState } from './memory/schema.ts';
+import { relatedTopics, DEFAULT_RELATEDNESS, type RelatednessConfig } from './manager/relatedness.ts';
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types';
 
 export const name = 'topic-guard';
@@ -60,12 +61,30 @@ export class TopicGuard extends Service {
       /** 新会话未绑定 Topic 时，累计多少条用户消息后自动建议创建。默认 3。 */
       autoSuggestAfterMessages: z.number().min(1),
     }),
+    /** 主题关联度（规则级，非 LLM）：用于按关联度注入相关主题上下文 + /t related|match。 */
+    relatedness: z.object({
+      enabled: z.boolean(),
+      topK: z.number().min(1),
+      minScore: z.number().min(0),
+      maxHops: z.number().min(1).max(5),
+      weights: z.object({
+        edgeCausal: weightSchema,
+        edgeHierarchical: weightSchema,
+        edgeDecay: weightSchema,
+        pathFamily: weightSchema,
+        factKey: weightSchema,
+        sessionCo: weightSchema,
+        keyword: weightSchema,
+        summary: weightSchema,
+      }),
+    }),
   });
 
   declare private config: {
     rootDir?: string;
     enabled: boolean;
     drift: DriftConfig;
+    relatedness: RelatednessConfig;
   };
 
   private readonly store: WorkspaceMemoryStore;
@@ -77,6 +96,8 @@ export class TopicGuard extends Service {
     super(ctx, 'topic-guard');
     const drift = (config.drift ?? {}) as Record<string, unknown>;
     const weights = (drift.weights ?? {}) as Record<string, unknown>;
+    const rel = (config.relatedness ?? {}) as Record<string, unknown>;
+    const relWeights = (rel.weights ?? {}) as Record<string, unknown>;
     this.config = {
       rootDir: typeof config.rootDir === 'string' ? config.rootDir : undefined,
       enabled: config.enabled !== false,
@@ -91,9 +112,25 @@ export class TopicGuard extends Service {
         cooldownMessages: typeof drift.cooldownMessages === 'number' ? drift.cooldownMessages : 3,
         autoSuggestAfterMessages: typeof drift.autoSuggestAfterMessages === 'number' ? drift.autoSuggestAfterMessages : 3,
       },
+      relatedness: {
+        enabled: rel.enabled !== false,
+        topK: typeof rel.topK === 'number' ? rel.topK : DEFAULT_RELATEDNESS.topK,
+        minScore: typeof rel.minScore === 'number' ? rel.minScore : DEFAULT_RELATEDNESS.minScore,
+        maxHops: typeof rel.maxHops === 'number' ? rel.maxHops : DEFAULT_RELATEDNESS.maxHops,
+        weights: {
+          edgeCausal: typeof relWeights.edgeCausal === 'number' ? relWeights.edgeCausal : DEFAULT_RELATEDNESS.weights.edgeCausal,
+          edgeHierarchical: typeof relWeights.edgeHierarchical === 'number' ? relWeights.edgeHierarchical : DEFAULT_RELATEDNESS.weights.edgeHierarchical,
+          edgeDecay: typeof relWeights.edgeDecay === 'number' ? relWeights.edgeDecay : DEFAULT_RELATEDNESS.weights.edgeDecay,
+          pathFamily: typeof relWeights.pathFamily === 'number' ? relWeights.pathFamily : DEFAULT_RELATEDNESS.weights.pathFamily,
+          factKey: typeof relWeights.factKey === 'number' ? relWeights.factKey : DEFAULT_RELATEDNESS.weights.factKey,
+          sessionCo: typeof relWeights.sessionCo === 'number' ? relWeights.sessionCo : DEFAULT_RELATEDNESS.weights.sessionCo,
+          keyword: typeof relWeights.keyword === 'number' ? relWeights.keyword : DEFAULT_RELATEDNESS.weights.keyword,
+          summary: typeof relWeights.summary === 'number' ? relWeights.summary : DEFAULT_RELATEDNESS.weights.summary,
+        },
+      },
     };
     this.store = new WorkspaceMemoryStore(resolveRoot(this.config.rootDir));
-    this.router = new TopicRouter(this.store, ctx.logger ?? {});
+    this.router = new TopicRouter(this.store, ctx.logger ?? {}, { relatedness: this.config.relatedness });
 
     void this.store.init().catch((error) => {
       ctx.logger?.warn?.(`topic-guard: 初始化记忆目录失败: ${error instanceof Error ? error.message : String(error)}`);
@@ -143,7 +180,7 @@ export class TopicGuard extends Service {
       description: 'Topic 管理：new/switch/merge/list/show/edit/inject/link/ignore/rm',
       // 必须声明 input：DSH 的 slash 裁决对"无 input 声明 + 带参数"的命令会放弃认领，
       // 把整行当作普通消息发给 LLM（用户主权被破坏）。声明后 /t xxx 一律本地执行。
-      input: { hint: 'new|switch|merge|list|show|edit|inject|link|ignore|rm [<args>]' },
+      input: { hint: 'new|switch|merge|list|show|edit|inject|link|related|match|fact|ignore|rm [<args>]' },
       handler: async (invocation: any) => {
         const raw = (invocation.rawInput ?? '').trim();
         const session = invocation.agent.session;
@@ -160,7 +197,7 @@ export class TopicGuard extends Service {
 
   /**
    * 刷新一个会话的 Topic 注入缓存（异步读 store）。
-   * 无活跃 Topic → 清空（provider 返回空字符串，不贡献上下文）。
+   * 无活跃 Topic → 清空。有活跃 Topic → 注入当前 Topic + 按关联度（非 LLM）注入相关主题摘要。
    */
   private async refreshTopicContext(sessionId: string): Promise<void> {
     try {
@@ -177,6 +214,21 @@ export class TopicGuard extends Service {
         goalText ? `目标：${goalText}` : '',
         summaryText ? `摘要：${summaryText}` : '',
       ];
+      // 核心：按关联度注入相关主题（规则级，非 LLM；得分+理由可解释）
+      if (this.config.relatedness.enabled && topic.status !== 'archived') {
+        try {
+          const rels = await relatedTopics(this.store, topic.id, this.config.relatedness);
+          if (rels.length > 0) {
+            lines.push('相关主题（按关联度）：');
+            for (const rel of rels) {
+              const relSummary = (await this.store.readSummary(rel.topicId)).trim().slice(0, 200);
+              lines.push(`- ${rel.topicId}（得分 ${rel.score}：${rel.reasons.join('; ')}）${relSummary ? `\n  ${relSummary}` : ''}`);
+            }
+          }
+        } catch (error) {
+          this.ctx.logger?.warn?.(`topic-guard: 关联主题注入失败: ${String(error)}`);
+        }
+      }
       this.topicCache.set(sessionId, lines.filter(Boolean).join('\n'));
     } catch (error) {
       this.topicCache.delete(sessionId);

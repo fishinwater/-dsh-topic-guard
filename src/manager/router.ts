@@ -19,6 +19,12 @@ import type { Topic } from '../memory/types.ts';
 import { slugId } from '../memory/paths.ts';
 import { WorkspaceMemoryStore } from '../memory/store.ts';
 import { attribute } from './attributor.ts';
+import {
+  collectSessionFeatures,
+  matchSessionToTopics,
+  relatedTopics,
+  type RelatednessConfig,
+} from './relatedness.ts';
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types';
 
 export interface CommandResult {
@@ -35,10 +41,17 @@ export interface SessionLike {
 export class TopicRouter {
   private readonly store: WorkspaceMemoryStore;
   private readonly logger: { warn?: (msg: string) => void };
+  /** 关联度配置（非 LLM 规则级；注入 /t related|match 使用）。 */
+  private readonly relatedness: RelatednessConfig;
 
-  constructor(store: WorkspaceMemoryStore, logger: { warn?: (msg: string) => void } = {}) {
+  constructor(
+    store: WorkspaceMemoryStore,
+    logger: { warn?: (msg: string) => void } = {},
+    opts: { relatedness?: RelatednessConfig } = {},
+  ) {
     this.store = store;
     this.logger = logger;
+    this.relatedness = opts.relatedness ?? { enabled: true, topK: 3, minScore: 0.5, maxHops: 2, weights: { edgeCausal: 1.0, edgeHierarchical: 0.6, edgeDecay: 0.5, pathFamily: 0.8, factKey: 0.5, sessionCo: 0.3, keyword: 0.2, summary: 0.4 } };
   }
 
   /** 处理 /t <sub> <args...>。 */
@@ -57,6 +70,9 @@ export class TopicRouter {
       case 'edit': return this.edit(restText, session);
       case 'inject': return this.inject(restText, session);
       case 'link': return this.link(restText);
+      case 'related': return this.related(restText, session);
+      case 'match': return this.match(restText, session);
+      case 'fact': return this.fact(restText, session);
       case 'ignore': return { kind: 'success', text: '已忽略漂移建议' };
       case 'rm': return this.remove(restText);
       case 'help': default: return this.help();
@@ -239,6 +255,69 @@ ${summary.trim().slice(0, 200)}`,
     }
   }
 
+  // ---- related（主题→主题关联度，非 LLM）----
+  private async related(arg: string, session: SessionLike): Promise<CommandResult> {
+    const json = /--json/.test(arg);
+    let id = arg.replace(/--json/g, '').trim();
+    if (!id) {
+      const active = await this.store.activeTopicFor(session.id);
+      id = active?.id ?? '';
+    }
+    if (!id) return { kind: 'error', text: '当前会话未绑定 Topic：/t related <id> [--json]' };
+    if (!(await this.store.loadTopic(id))) return { kind: 'error', text: `Topic 不存在：${id}` };
+    const rels = await relatedTopics(this.store, id, this.relatedness);
+    if (json) return { kind: 'success', text: JSON.stringify({ topicId: id, related: rels }) };
+    if (rels.length === 0) return { kind: 'success', text: `Topic ${id} 暂无关联主题（得分 ≥ ${this.relatedness.minScore}）。可用 /t link 建立显式关联边，或 /t edit 补摘要后重试。` };
+    const lines = rels.map((r2) => `  ${r2.topicId}（得分 ${r2.score}：${r2.reasons.join('; ')}）`);
+    return { kind: 'success', text: [`Topic ${id} 的关联主题（规则级，非 LLM）：`, ...lines].join('\n') };
+  }
+
+  // ---- match（会话→主题匹配，服务端升级客户端弱匹配）----
+  private async match(arg: string, session: SessionLike): Promise<CommandResult> {
+    const json = /--json/.test(arg);
+    const active = await this.store.activeTopicFor(session.id);
+    const features = collectSessionFeatures(session);
+    if (active) {
+      const facts = await this.store.activeFacts(active.id);
+      features.factKeys = facts.map((f) => f.factKey ?? '').filter(Boolean);
+    }
+    const hits = await matchSessionToTopics(this.store, features, this.relatedness);
+    if (json) return { kind: 'success', text: JSON.stringify({ activeTopicId: active?.id ?? null, matches: hits }) };
+    if (hits.length === 0) return { kind: 'success', text: '未命中已定义 Topic。可用 /t new <名称> 为当前上下文创建话题' };
+    const lines = hits.map((h) => `  ${h.topicId}（得分 ${h.score}：${h.reasons.join('; ')}）`);
+    return { kind: 'success', text: ['上下文命中话题（最近用户输入 + 工具调用特征）：', ...lines].join('\n') };
+  }
+
+  // ---- fact（事实条目管理，含冲突替换）----
+  private async fact(arg: string, session: SessionLike): Promise<CommandResult> {
+    const [sub, ...rest] = arg.trim().split(/\s+/);
+    if (sub === 'add') {
+      const m = rest.join(' ').match(/^(\S+)\s+(\S+)\s+([\s\S]+)$/);
+      if (!m) return { kind: 'error', text: '用法：/t fact add <topicId> <factKey> <value>' };
+      const [, id, factKey, value] = m;
+      if (!(await this.store.loadTopic(id))) return { kind: 'error', text: `Topic 不存在：${id}` };
+      const before = await this.store.activeFacts(id);
+      const manifest = await this.store.appendFacts(id, [{ factKey, value, source: { turn: 'cli', tool: 'fact' } }]);
+      const after = await this.store.activeFacts(id);
+      const replaced = before.find((f) => f.factKey === factKey && f.value !== value);
+      if (replaced) {
+        return { kind: 'success', text: `冲突替换：${id} 的 ${factKey} ${replaced.value} → ${value}（旧条目 superseded，后者为准）` };
+      }
+      return { kind: 'success', text: `已记录事实：${id} ${factKey} = ${value}（抽屉共 ${manifest.entries.length} 条）` };
+    }
+    // show / active（默认当前会话主题）
+    let id = rest.join(' ').trim();
+    if (!id) {
+      const active = await this.store.activeTopicFor(session.id);
+      id = active?.id ?? '';
+    }
+    if (!id) return { kind: 'error', text: '当前会话未绑定 Topic：/t fact show [topicId]' };
+    const facts = await this.store.activeFacts(id);
+    if (facts.length === 0) return { kind: 'success', text: `Topic ${id} 暂无 active 事实（/t fact add ${id} <factKey> <value>）` };
+    const lines = facts.map((f) => `  ${f.factKey} = ${f.value}`);
+    return { kind: 'success', text: [`Topic ${id} 当前有效事实：`, ...lines].join('\n') };
+  }
+
   // ---- rm ----
   private async remove(arg: string): Promise<CommandResult> {
     const id = arg.trim();
@@ -261,6 +340,10 @@ ${summary.trim().slice(0, 200)}`,
         '  /t edit <id> <摘要>              确认摘要（draft→active）',
         '  /t inject [id]                   注入摘要到上下文',
         '  /t link <a> <b> [--type causal|hierarchical]  关联边',
+        '  /t related [id] [--json]          主题关联度（非 LLM）',
+        '  /t match [--json]                 会话→主题匹配（服务端）',
+        '  /t fact add <id> <key> <value>    记录事实（冲突后者为准）',
+        '  /t fact show [id]                 查看 active 事实',
         '  /t dump [list|show <id>]          输出 JSON（客户端面板数据源）',
         '  /t ignore                        放弃漂移建议',
         '  /t rm <id>                       删除',

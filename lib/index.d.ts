@@ -31,7 +31,7 @@ export declare class TopicGuard extends Service {
     private registerCommands;
     /**
      * 刷新一个会话的 Topic 注入缓存（异步读 store）。
-     * 无活跃 Topic → 清空（provider 返回空字符串，不贡献上下文）。
+     * 无活跃 Topic → 清空。有活跃 Topic → 注入当前 Topic + 按关联度（非 LLM）注入相关主题摘要。
      */
     private refreshTopicContext;
     /**

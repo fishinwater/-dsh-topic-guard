@@ -1,4 +1,5 @@
 import { WorkspaceMemoryStore } from '../memory/store.ts';
+import { type RelatednessConfig } from './relatedness.ts';
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types';
 export interface CommandResult {
     kind: 'success' | 'error';
@@ -12,8 +13,12 @@ export interface SessionLike {
 export declare class TopicRouter {
     private readonly store;
     private readonly logger;
+    /** 关联度配置（非 LLM 规则级；注入 /t related|match 使用）。 */
+    private readonly relatedness;
     constructor(store: WorkspaceMemoryStore, logger?: {
         warn?: (msg: string) => void;
+    }, opts?: {
+        relatedness?: RelatednessConfig;
     });
     /** 处理 /t <sub> <args...>。 */
     handle(raw: string, session: SessionLike): Promise<CommandResult>;
@@ -26,6 +31,9 @@ export declare class TopicRouter {
     private edit;
     private inject;
     private link;
+    private related;
+    private match;
+    private fact;
     private remove;
     private help;
 }

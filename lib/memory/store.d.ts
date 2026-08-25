@@ -32,6 +32,20 @@ export declare class WorkspaceMemoryStore {
     readArtifacts(id: string): Promise<ArtifactManifest>;
     saveArtifacts(id: string, manifest: ArtifactManifest): Promise<void>;
     appendArtifacts(id: string, entries: ArtifactManifest['entries']): Promise<ArtifactManifest>;
+    /**
+     * 追加事实条目并执行冲突替换（"后者为准"原则）：
+     * - 同 factKey 且值一致 → 跳过（强化语义由调用方记录）；
+     * - 同 factKey 且值不同 → 冲突：旧条目 status=superseded + supersededBy 指向新条目，新条目 active 追加；
+     * - 新 factKey → 直接追加（active）。
+     * 全部原子写；superseded 条目保留在历史中（审计留痕），不参与召回。
+     */
+    appendFacts(id: string, facts: Array<{
+        factKey: string;
+        value: string;
+        source?: import('./types.ts').FactSource;
+    }>): Promise<ArtifactManifest>;
+    /** 当前有效事实（status=active 的 fact 条目）。 */
+    activeFacts(id: string): Promise<ArtifactManifest['entries']>;
     linkTopics(a: string, b: string, type: TopicEdgeType): Promise<void>;
     /**
      * 合并 from → into：摘要追加小节、资料去重合并、记录关联边、from 归档。

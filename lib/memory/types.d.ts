@@ -51,9 +51,25 @@ export interface TopicIndex {
     sessionTopics: Record<string, string>;
 }
 /** artifacts/manifest.json 条目类型。 */
-export type ArtifactKind = 'file' | 'log' | 'decision';
+export type ArtifactKind = 'file' | 'log' | 'decision' | 'fact';
+/** fact 条目来源（provenance 溯源）。 */
+export interface FactSource {
+    /** 产生事实的会话轮次/对话标识。 */
+    turn?: string;
+    /** 产生事实的工具（read/web_search/…）。 */
+    tool?: string;
+    /** 事实依据的文件路径。 */
+    path?: string;
+}
+/** fact 条目被谁替换（冲突替换留痕）。 */
+export interface FactSupersededBy {
+    factKey: string;
+    value: string;
+    /** 替换条目的 seq。 */
+    seq: number;
+}
 export interface ArtifactEntry {
-    /** file=关键文件引用；log=工具输出片段；decision=决策记录。 */
+    /** file=关键文件引用；log=工具输出片段；decision=决策记录；fact=事实条目。 */
     kind: ArtifactKind;
     /** file 的文件路径；log 的来源标识（如 tool callId）。 */
     path?: string;
@@ -63,6 +79,16 @@ export interface ArtifactEntry {
     seq?: number;
     /** 捕获时间（epoch ms）。 */
     capturedAt: number;
+    /** 事实键（同一键 = 同一事实主题，冲突检测依据）。 */
+    factKey?: string;
+    /** 事实值。 */
+    value?: string;
+    /** active=当前有效；superseded=被后续冲突内容替换（"后者为准"）。 */
+    status?: 'active' | 'superseded';
+    /** 被谁替换（仅 superseded 条目有）。 */
+    supersededBy?: FactSupersededBy | null;
+    /** 事实来源（provenance）。 */
+    source?: FactSource | null;
 }
 export interface ArtifactManifest {
     version: 1;

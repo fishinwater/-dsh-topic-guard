@@ -210,6 +210,56 @@ export class WorkspaceMemoryStore {
     return manifest;
   }
 
+  // ---- 事实条目（fact）----
+
+  /**
+   * 追加事实条目并执行冲突替换（"后者为准"原则）：
+   * - 同 factKey 且值一致 → 跳过（强化语义由调用方记录）；
+   * - 同 factKey 且值不同 → 冲突：旧条目 status=superseded + supersededBy 指向新条目，新条目 active 追加；
+   * - 新 factKey → 直接追加（active）。
+   * 全部原子写；superseded 条目保留在历史中（审计留痕），不参与召回。
+   */
+  async appendFacts(id: string, facts: Array<{ factKey: string; value: string; source?: import('./types.ts').FactSource }>): Promise<ArtifactManifest> {
+    if (facts.length === 0) return this.readArtifacts(id);
+    this.assertSafeId(id);
+    const manifest = await this.readArtifacts(id);
+    const entries = manifest.entries;
+    const maxSeq = entries.reduce((m, e) => Math.max(m, e.seq ?? 0), 0);
+    let seq = maxSeq + 1;
+    const now = Date.now();
+    for (const f of facts) {
+      const existing = entries.find(
+        (e) => e.kind === 'fact' && e.factKey === f.factKey && e.status === 'active',
+      );
+      if (existing) {
+        if (existing.value === f.value) continue; // 一致：无动作
+        // 冲突：后者为准，替换
+        existing.status = 'superseded';
+        existing.supersededBy = { factKey: f.factKey, value: f.value, seq };
+      }
+      entries.push({
+        kind: 'fact',
+        factKey: f.factKey,
+        value: f.value,
+        status: 'active',
+        supersededBy: null,
+        source: f.source ?? null,
+        seq,
+        capturedAt: now,
+      });
+      seq += 1;
+    }
+    await this.saveArtifacts(id, manifest);
+    return manifest;
+  }
+
+  /** 当前有效事实（status=active 的 fact 条目）。 */
+  async activeFacts(id: string): Promise<ArtifactManifest['entries']> {
+    this.assertSafeId(id);
+    const manifest = await this.readArtifacts(id);
+    return manifest.entries.filter((e) => e.kind === 'fact' && e.status === 'active');
+  }
+
   // ---- 关联边 ----
   async linkTopics(a: string, b: string, type: TopicEdgeType): Promise<void> {
     this.assertSafeId(a);
